@@ -30,7 +30,6 @@ public:
         : QObject(mainWindow)
         , m_mainWindow(mainWindow)
     {
-        // Инициализация словаря из dictionary.h
         QMap<QString, QString> dict;
         #include "dictionary.h"
         m_dict = dict;
@@ -52,7 +51,7 @@ public:
         mainLayout->setContentsMargins(8, 8, 8, 8);
         
         m_searchEdit = new QLineEdit(container);
-        m_searchEdit->setPlaceholderText("🔍 Enter search mask...");
+        m_searchEdit->setPlaceholderText("🔍 Enter search mask (space = AND)");
         m_searchEdit->setClearButtonEnabled(true);
         mainLayout->addWidget(m_searchEdit);
         
@@ -68,8 +67,6 @@ public:
         
         connect(m_searchEdit, &QLineEdit::textChanged, this, &DictPluginView::updateList);
         connect(m_listWidget, &QListWidget::currentTextChanged, this, &DictPluginView::updateText);
-        
-        // Двойной клик по элементу списка
         connect(m_listWidget, &QListWidget::itemDoubleClicked, this, &DictPluginView::insertWord);
         
         updateList();
@@ -92,16 +89,37 @@ private slots:
         
         QString searchMask = mask.isEmpty() ? m_searchEdit->text() : mask;
         
-        for (auto it = m_dict.begin(); it != m_dict.end(); ++it) {
-            if (searchMask.isEmpty() || it.key().contains(searchMask, Qt::CaseInsensitive)) {
+        if (searchMask.isEmpty()) {
+            // Если маска пустая, показываем всё
+            for (auto it = m_dict.begin(); it != m_dict.end(); ++it) {
                 m_listWidget->addItem(it.key());
+            }
+        } else {
+            // Разбиваем маску на слова по пробелам
+            QStringList words = searchMask.split(' ', Qt::SkipEmptyParts);
+            
+            for (auto it = m_dict.begin(); it != m_dict.end(); ++it) {
+                QString key = it.key();
+                bool allWordsMatch = true;
+                
+                // Проверяем, что все слова из маски присутствуют в ключе
+                for (const QString& word : words) {
+                    if (!key.contains(word, Qt::CaseInsensitive)) {
+                        allWordsMatch = false;
+                        break;
+                    }
+                }
+                
+                if (allWordsMatch) {
+                    m_listWidget->addItem(key);
+                }
             }
         }
         
         if (m_listWidget->count() > 0) {
             m_listWidget->setCurrentRow(0);
         } else {
-            m_textEdit->setText("📭 No matches found.\n\nTry a different search mask.");
+            m_textEdit->setText("No matches found.\n\nTry a different search mask.");
         }
     }
     
@@ -111,8 +129,18 @@ private slots:
         
         if (m_dict.contains(key)) {
             QString text = m_dict[key];
-            text.prepend("<b>📖 " + key.toUpper() + "</b><br><br>");
-            m_textEdit->setHtml(text);
+            
+            // Экранируем HTML-спецсимволы
+            text.replace("&", "&amp;");
+            text.replace("<", "&lt;");
+            text.replace(">", "&gt;");
+            text.replace("\"", "&quot;");
+            
+            // Заменяем \n на <br> для корректного отображения
+            text.replace("\\n", "<br>");
+            
+            QString header = "<b>" + key.toUpper() + "</b><br><br>";
+            m_textEdit->setHtml(header + text);
         } else {
             m_textEdit->clear();
         }
@@ -124,20 +152,12 @@ private slots:
         
         QString word = item->text();
         
-        // Получаем активный документ
         KTextEditor::View* view = m_mainWindow->activeView();
-        if (!view) {
-            qDebug() << "No active view";
-            return;
-        }
+        if (!view) return;
         
         KTextEditor::Document* doc = view->document();
-        if (!doc) {
-            qDebug() << "No active document";
-            return;
-        }
+        if (!doc) return;
         
-        // Вставляем слово в текущую позицию курсора
         KTextEditor::Cursor cursor = view->cursorPosition();
         doc->insertText(cursor, word);
         
@@ -145,6 +165,16 @@ private slots:
     }
     
 private:
+    bool keyMatchesAllWords(const QString& key, const QStringList& words)
+    {
+        for (const QString& word : words) {
+            if (!key.contains(word, Qt::CaseInsensitive)) {
+                return false;
+            }
+        }
+        return true;
+    }
+    
     QLineEdit* m_searchEdit = nullptr;
     QListWidget* m_listWidget = nullptr;
     QTextEdit* m_textEdit = nullptr;
