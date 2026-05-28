@@ -1,79 +1,162 @@
 #include <ktexteditor/plugin.h>
 #include <ktexteditor/mainwindow.h>
+#include <ktexteditor/document.h>
+#include <ktexteditor/view.h>
 #include <KPluginFactory>
 #include <QWidget>
-#include <QLabel>
 #include <QVBoxLayout>
+#include <QLineEdit>
+#include <QListWidget>
+#include <QTextEdit>
+#include <QMap>
 #include <QIcon>
 #include <QDebug>
 
-class TestPlugin : public KTextEditor::Plugin
+class DictPlugin : public KTextEditor::Plugin
 {
     Q_OBJECT
 public:
-    explicit TestPlugin(QObject* parent = nullptr, const QVariantList& args = QVariantList())
+    explicit DictPlugin(QObject* parent = nullptr, const QVariantList& args = QVariantList())
         : KTextEditor::Plugin(parent) {}
-
+    
     QObject* createView(KTextEditor::MainWindow* mainWindow) override;
 };
 
-class TestPluginView : public QObject
+class DictPluginView : public QObject
 {
     Q_OBJECT
 public:
-    explicit TestPluginView(TestPlugin* plugin, KTextEditor::MainWindow* mainWindow)
+    explicit DictPluginView(DictPlugin* plugin, KTextEditor::MainWindow* mainWindow)
         : QObject(mainWindow)
+        , m_mainWindow(mainWindow)
     {
-        // 1. Запрашиваем создание ToolView у главного окна Kate
+        // Инициализация словаря из dictionary.h
+        QMap<QString, QString> dict;
+        #include "dictionary.h"
+        m_dict = dict;
+        
+        qDebug() << "Dictionary loaded, size:" << m_dict.size();
+        
         QWidget* tv = mainWindow->createToolView(
             plugin,
-            QStringLiteral("test_panel"),
+            QStringLiteral("dict_panel"),
             KTextEditor::MainWindow::Left,
-            QIcon::fromTheme(QStringLiteral("dialog-information")),
-            QStringLiteral("TEST")
+            QIcon::fromTheme(QStringLiteral("accessories-dictionary")),
+            QStringLiteral("Dictionary")
         );
-
-        if (!tv) {
-            qWarning() << "Ошибка: Не удалось создать ToolView!";
-            return;
-        }
-
-        tv->setMinimumWidth(200);
-        tv->setMinimumHeight(100);
-
-        // 2. Создаем свой виджет-контейнер, чтобы не нарушать внутренний layout Kate
+        
+        tv->setMinimumWidth(320);
+        
         QWidget* container = new QWidget(tv);
-        QVBoxLayout* layout = new QVBoxLayout(container);
-        layout->setContentsMargins(10, 10, 10, 10);
-
-        // 3. Создаем и стилизуем текстовую метку
-        QLabel* label = new QLabel(QStringLiteral("HELLO WORLD"), container);
-        label->setAlignment(Qt::AlignCenter);
-        label->setStyleSheet(QStringLiteral("color: red; background: yellow; font-size: 20px;"));
-
-        layout->addWidget(label);
-
-        // 4. Безопасно встраиваем наш контейнер в существующий макет панели
+        QVBoxLayout* mainLayout = new QVBoxLayout(container);
+        mainLayout->setContentsMargins(8, 8, 8, 8);
+        
+        m_searchEdit = new QLineEdit(container);
+        m_searchEdit->setPlaceholderText("🔍 Enter search mask...");
+        m_searchEdit->setClearButtonEnabled(true);
+        mainLayout->addWidget(m_searchEdit);
+        
+        m_listWidget = new QListWidget(container);
+        m_listWidget->setAlternatingRowColors(true);
+        mainLayout->addWidget(m_listWidget);
+        
+        m_textEdit = new QTextEdit(container);
+        m_textEdit->setReadOnly(true);
+        m_textEdit->setPlaceholderText("Select a word to see description...");
+        m_textEdit->setMinimumHeight(150);
+        mainLayout->addWidget(m_textEdit);
+        
+        connect(m_searchEdit, &QLineEdit::textChanged, this, &DictPluginView::updateList);
+        connect(m_listWidget, &QListWidget::currentTextChanged, this, &DictPluginView::updateText);
+        
+        // Двойной клик по элементу списка
+        connect(m_listWidget, &QListWidget::itemDoubleClicked, this, &DictPluginView::insertWord);
+        
+        updateList();
+        
         if (tv->layout()) {
             tv->layout()->addWidget(container);
         } else {
-            // Резервный вариант, если у возвращенного виджета изначально нет layout
             QVBoxLayout* rootLayout = new QVBoxLayout(tv);
             rootLayout->setContentsMargins(0, 0, 0, 0);
             rootLayout->addWidget(container);
         }
-
-        qDebug() << "ToolView успешно создан, текст метки:" << label->text();
     }
+    
+private slots:
+    void updateList(const QString& mask = QString())
+    {
+        if (!m_listWidget) return;
+        
+        m_listWidget->clear();
+        
+        QString searchMask = mask.isEmpty() ? m_searchEdit->text() : mask;
+        
+        for (auto it = m_dict.begin(); it != m_dict.end(); ++it) {
+            if (searchMask.isEmpty() || it.key().contains(searchMask, Qt::CaseInsensitive)) {
+                m_listWidget->addItem(it.key());
+            }
+        }
+        
+        if (m_listWidget->count() > 0) {
+            m_listWidget->setCurrentRow(0);
+        } else {
+            m_textEdit->setText("📭 No matches found.\n\nTry a different search mask.");
+        }
+    }
+    
+    void updateText(const QString& key)
+    {
+        if (!m_textEdit || key.isEmpty()) return;
+        
+        if (m_dict.contains(key)) {
+            QString text = m_dict[key];
+            text.prepend("<b>📖 " + key.toUpper() + "</b><br><br>");
+            m_textEdit->setHtml(text);
+        } else {
+            m_textEdit->clear();
+        }
+    }
+    
+    void insertWord(QListWidgetItem* item)
+    {
+        if (!item) return;
+        
+        QString word = item->text();
+        
+        // Получаем активный документ
+        KTextEditor::View* view = m_mainWindow->activeView();
+        if (!view) {
+            qDebug() << "No active view";
+            return;
+        }
+        
+        KTextEditor::Document* doc = view->document();
+        if (!doc) {
+            qDebug() << "No active document";
+            return;
+        }
+        
+        // Вставляем слово в текущую позицию курсора
+        KTextEditor::Cursor cursor = view->cursorPosition();
+        doc->insertText(cursor, word);
+        
+        qDebug() << "Inserted word:" << word;
+    }
+    
+private:
+    QLineEdit* m_searchEdit = nullptr;
+    QListWidget* m_listWidget = nullptr;
+    QTextEdit* m_textEdit = nullptr;
+    QMap<QString, QString> m_dict;
+    KTextEditor::MainWindow* m_mainWindow = nullptr;
 };
 
-// Реализация фабричного метода для создания представления плагина
-QObject* TestPlugin::createView(KTextEditor::MainWindow* mainWindow)
+QObject* DictPlugin::createView(KTextEditor::MainWindow* mainWindow)
 {
-    return new TestPluginView(this, mainWindow);
+    return new DictPluginView(this, mainWindow);
 }
 
-// Экспорт фабрики плагина с указанием JSON-файла метаданных
-K_PLUGIN_FACTORY_WITH_JSON(TestPluginFactory, "3decommand.json", registerPlugin<TestPlugin>();)
+K_PLUGIN_FACTORY_WITH_JSON(DictPluginFactory, "3decommand.json", registerPlugin<DictPlugin>();)
 
 #include "plugin.moc"
