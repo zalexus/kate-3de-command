@@ -1,0 +1,14 @@
+{
+    "KPlugin": {
+        "Id": "3decommand",
+        "Name": "3DE Command",
+        "Description": "3DE Command Tool for Kate",
+        "Version": "1.0",
+        "Authors": [
+            {
+                "Name": "Alexey Zaytsev",
+                "Email": "zalexus@gmail.com"
+            }
+        ]
+    }
+}
